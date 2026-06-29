@@ -307,6 +307,39 @@ def _maybe_handle_skip_if_lt_x_gpu(args, msg) -> bool:
     return True
 
 
+def skip_if_lt_x_devices(x, *, allow_cpu=False):
+    """Skip if fewer than x devices available for the current accelerator.
+
+    Unlike @skip_if_lt_x_gpu, this does not hard-code cuda/hpu/xpu.
+    It uses torch.accelerator.current_accelerator() to determine the device type.
+    """
+
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            device_type = (
+                acc.type if (acc := torch.accelerator.current_accelerator()) else "cpu"
+            )
+
+            if device_type == "cpu":
+                if allow_cpu:
+                    return func(*args, **kwargs)
+                raise unittest.SkipTest("requires accelerator")
+
+            device_module = torch.get_device_module(device_type)
+            if device_module.is_available() and device_module.device_count() >= x:
+                return func(*args, **kwargs)
+
+            raise unittest.SkipTest(
+                f"requires at least {x} {device_type} devices, "
+                f"found {device_module.device_count()}"
+            )
+
+        return wrapper
+
+    return decorator
+
+
 def skip_if_lt_x_gpu(x, *, allow_cpu=False):
     """Skip if fewer than x accelerators available.
 

@@ -57,39 +57,28 @@ from torch.testing._internal.common_distributed import (
     MultiProcessTestCase,
     MultiThreadedTestCase,
     run_subtests,
-    skip_if_lt_x_gpu,
+    skip_if_lt_x_devices,
     TEST_SKIPS,
 )
-from torch.testing._internal.common_utils import (
-    TEST_CUDA,
-    TEST_HPU,
-    TEST_PRIVATEUSE1,
-    TEST_WITH_ROCM,
-    TEST_XPU,
-)
+
 from torch.testing._internal.distributed.fake_pg import FakeStore
 from torch.utils._pytree import tree_flatten, tree_unflatten, TreeSpec
 
 
 DEVICE_COUNT: int
 
-if TEST_CUDA or TEST_XPU or TEST_HPU or TEST_PRIVATEUSE1:
+if torch.accelerator.is_available():
     DEVICE_TYPE = torch.accelerator.current_accelerator().type
     DEVICE_COUNT = torch.accelerator.device_count()
-    PG_BACKEND = dist.Backend.default_device_backend_map[DEVICE_TYPE]
+    PG_BACKEND = dist.get_default_backend_for_device(DEVICE_TYPE)
 else:
     DEVICE_TYPE = "cpu"
+    DEVICE_COUNT = 0
     PG_BACKEND = "gloo"
 
-if TEST_WITH_ROCM:
-    NUM_DEVICES = min(4, max(2, torch.cuda.device_count()))
-else:
-    NUM_DEVICES = 4
-
-# We use this as a proxy for "multiple GPUs exist"
-if (TEST_CUDA or TEST_XPU or TEST_HPU or TEST_PRIVATEUSE1) and DEVICE_COUNT > 1:
-    # when we actually have multiple GPUs, relax the requirement to smaller counts.
-    NUM_DEVICES = min(NUM_DEVICES, DEVICE_COUNT)
+NUM_DEVICES = 4
+if DEVICE_COUNT > 0:
+    NUM_DEVICES = min(NUM_DEVICES, max(2, DEVICE_COUNT))
 
 T = TypeVar("T")
 
@@ -629,7 +618,7 @@ def skip_unless_torch_gpu(method: T) -> T:
     >>>   ...
     """
     # The builtin @skip_if_no_gpu relies on os.environ['WORLD_SIZE'] being set.
-    return cast(T, skip_if_lt_x_gpu(NUM_DEVICES)(method))
+    return cast(T, skip_if_lt_x_devices(NUM_DEVICES)(method))
 
 
 class DTensorTestMixin:
@@ -641,13 +630,9 @@ class DTensorTestMixin:
 
     @property
     def device_type(self) -> str:
-        if (
-            not (TEST_CUDA or TEST_XPU or TEST_HPU or TEST_PRIVATEUSE1)
-            or DEVICE_COUNT < self.world_size
-        ):
+        if not torch.accelerator.is_available() or DEVICE_COUNT < self.world_size:
             return "cpu"
-        else:
-            return DEVICE_TYPE
+        return DEVICE_TYPE
 
     def build_device_mesh(self) -> DeviceMesh:
         return init_device_mesh(self.device_type, (self.world_size,))
@@ -849,8 +834,11 @@ class DTensorTestBase(DTensorTestMixin, MultiProcessTestCase):
         # FIXME can't use the above all_reduce as it causes hangs on bionic and focal. It hangs:
         #  test_dtensor.py  -- DTensorMeshTest.test_dtensor_device_mesh_device_conversion
         if device_id is None:
+            device_module = torch.get_device_module(self.device_type)
             device_id = (
-                torch.cuda.current_device() if self.device_type == "cuda" else self.rank
+                device_module.current_device()
+                if hasattr(device_module, "current_device")
+                else self.rank
             )
 
         if self.device_type == "cpu":

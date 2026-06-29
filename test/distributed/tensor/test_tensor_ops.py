@@ -18,7 +18,7 @@ from torch.distributed.tensor import (
 from torch.distributed.tensor._dtensor_spec import TensorMeta
 from torch.distributed.tensor._sharding_prop import ShardingPropagator
 from torch.distributed.tensor.debug import CommDebugMode
-from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
+from torch.testing._internal.common_distributed import skip_if_lt_x_devices
 from torch.testing._internal.common_utils import (
     instantiate_parametrized_tests,
     parametrize,
@@ -464,7 +464,7 @@ class DistTensorOpsTest(DTensorContinuousTestBase):
         self.assertEqual(dist_tensor.dtype, torch.float32)
         self.assertEqual(zeros_like_dt.dtype, torch.bfloat16)
 
-    @skip_if_lt_x_gpu(4)
+    @skip_if_lt_x_devices(4)
     def test_stack(self):
         mesh_2d = DeviceMesh(
             self.device_type, torch.arange(self.world_size).reshape(2, 2)
@@ -1686,7 +1686,7 @@ class DistArgMaxArgMinTest(DTensorContinuousTestBase):
         [Replicate(), Shard(1)],
     )
 
-    @skip_if_lt_x_gpu(4)
+    @skip_if_lt_x_devices(4)
     def test_argmax_argmin_with_placements(self):
         device_mesh = self.build_device_mesh()
         local_tensor = torch.tensor(self.sample, device=self.device_type)

@@ -13,7 +13,7 @@ from torch.distributed.tensor import (
 )
 from torch.distributed.tensor.debug import CommDebugMode
 from torch.distributed.tensor.experimental import local_map
-from torch.testing._internal.common_distributed import skip_if_lt_x_gpu
+from torch.testing._internal.common_distributed import skip_if_lt_x_devices
 from torch.testing._internal.common_utils import run_tests
 from torch.testing._internal.distributed._tensor.common_dtensor import (
     DTensorTestBase,
@@ -384,7 +384,7 @@ class TestLocalMap(DTensorTestBase):
             )
             self.assertEqual(W_dt.grad.full_tensor(), W.grad)
 
-    @skip_if_lt_x_gpu(4)
+    @skip_if_lt_x_devices(4)
     @with_comms
     def test_multi_mesh_inputs(self):
         """

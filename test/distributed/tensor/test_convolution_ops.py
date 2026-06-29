@@ -20,7 +20,7 @@ from torch.testing._internal.common_utils import run_tests
 from torch.testing._internal.distributed._tensor.common_dtensor import (
     create_local_tensor_test_class,
     DTensorTestBase,
-    skip_if_lt_x_gpu,
+    skip_if_lt_x_devices,
     with_comms,
 )
 
@@ -119,7 +119,7 @@ class DistConvolutionOpsTest(DTensorTestBase):
     # TODO: test_depthwise_convolution is broken in CI with gloo backend.
     # Temporarily disable it to unblock CI.
     @with_comms
-    @skip_if_lt_x_gpu(2)
+    @skip_if_lt_x_devices(2)
     def test_depthwise_convolution(self):
         device_mesh = self.build_device_mesh()
         shard_spec = [Shard(3)]
@@ -187,7 +187,7 @@ class DistConvolutionOpsTest(DTensorTestBase):
         )
 
     @with_comms
-    @skip_if_lt_x_gpu(2)
+    @skip_if_lt_x_devices(2)
     def test_conv_backward_none_grad_inp(self):
         device_mesh = self.build_device_mesh()
         conv = nn.Conv2d(64, 64, 3, padding=1).train()
@@ -297,7 +297,7 @@ class DistConvolutionOpsTest(DTensorTestBase):
 
     @with_tf32_off
     @with_comms
-    @skip_if_lt_x_gpu(2)
+    @skip_if_lt_x_devices(2)
     def test_conv2d_batch_shard_strided(self):
         """Batch-dim sharding with stride != 1 should not hit _is_supported."""
         device_mesh = self.build_device_mesh()
@@ -359,7 +359,7 @@ class DistConvolutionOpsTest(DTensorTestBase):
 
     @with_tf32_off
     @with_comms
-    @skip_if_lt_x_gpu(2)
+    @skip_if_lt_x_devices(2)
     def test_conv1d_batch_shard(self):
         device_mesh = self.build_device_mesh()
 
@@ -392,7 +392,7 @@ class DistConvolutionOpsTest(DTensorTestBase):
 
     @with_tf32_off
     @with_comms
-    @skip_if_lt_x_gpu(2)
+    @skip_if_lt_x_devices(2)
     def test_conv3d_batch_shard(self):
         device_mesh = self.build_device_mesh()
 
