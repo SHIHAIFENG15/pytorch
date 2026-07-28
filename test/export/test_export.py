@@ -95,7 +95,7 @@ from torch.testing._internal.custom_tensor import (
     CustomTensorPlainOut,
 )
 from torch.testing._internal.common_device_type import instantiate_device_type_tests
-from torch.testing._internal.inductor_utils import GPU_TYPE, HAS_GPU, ensure_triton
+from torch.testing._internal.inductor_utils import ensure_triton
 from torch.testing._internal.torchbind_impls import load_torchbind_test_lib
 from torch.testing._internal.triton_utils import requires_cuda_and_triton
 from torch.testing._internal.two_tensor import TwoTensor
