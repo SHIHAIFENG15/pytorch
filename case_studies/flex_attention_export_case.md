@@ -94,7 +94,7 @@ out = torch.compile(flex_attention)(q, k, v, block_mask=block_mask)
 | PyTorch（跑 NPU） | **2.13.x**（与当前 `torch_npu` `SUPPORTED_TORCH_VERSION` 对齐） |
 | torch_npu | 与 2.13 配套源码安装 |
 | Triton | 3.2.x（含 ascend 后端包） |
-| 入口脚本 | `npu-pytorch-setup/run_test.sh`（`cpu`/`npu` 两种模式） |
+| 测试运行 | 直接 `python <test_file>` + `PYTORCH_TESTING_DEVICE_ONLY_FOR=npu`（见 6.1 节），无需封装脚本 |
 
 原则：验证「NPU 能否跑」必须用加速库允许的框架大版本；业务 fork 可更新测例，但不要把更新的 2.14 `torch` 直接 `pip install -e` 进 `venv_npu`；上游测例里不写死 `import torch_npu._inductor`。
 
@@ -170,7 +170,6 @@ npu-pytorch-setup/
 ├── venv_cpu/         # 仅含 CPU torch 的虚拟环境
 ├── venv_npu/         # 含 torch + torch_npu 的虚拟环境
 ├── log/              # 编译日志
-├── run_test.sh       # 统一测试入口
 ├── setup_pytorch_envs.sh
 └── patches/
 ```
@@ -178,7 +177,13 @@ npu-pytorch-setup/
 ### 3.4 环境冒烟验证
 
 ```bash
-# 在容器内或经 run_test.sh 转发的 NPU 环境中
+# CPU 环境
+source "$VENV_CPU/bin/activate"
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
+
+# NPU 环境（先 source CANN，再激活 venv_npu）
+source "$CANN/set_env.sh"
+source "$VENV_NPU/bin/activate"
 python -c "import torch, torch_npu; print(torch.__version__, torch.npu.is_available(), torch.npu.device_count())"
 # 预期示例：2.13.0a0+gitfad7424 True 8
 ```
@@ -186,8 +191,8 @@ python -c "import torch, torch_npu; print(torch.__version__, torch.npu.is_availa
 ### 3.5 日常使用约定
 
 - **改测例代码**：在业务 fork（如 `/home/y00839695/pytorch`）中修改；运行时仍用 pin 树的 `torch`。
-- **跑 NPU 测试**：始终走 `run_test.sh npu ...`（自动设 `PYTORCH_TESTING_DEVICE_ONLY_FOR=npu`，宿主机无 CANN 时自动 `docker exec` 进容器）。
-- **跑 CPU 对照**：`run_test.sh cpu ...`。
+- **跑 NPU 测试**：先 `source $CANN/set_env.sh` 再激活 `venv_npu`，并设 `export PYTORCH_TESTING_DEVICE_ONLY_FOR=npu`，然后直接 `python <test_file> ...`（见 6.1 节完整命令）。
+- **跑 CPU 对照**：激活 `venv_cpu` 后直接 `python <test_file> ...`。
 - **禁止**：将更新的 2.14 fork `pip install -e` 进 `venv_npu`（会破坏 `torch_npu` 兼容性）。
 
 ---
@@ -441,17 +446,36 @@ def ensure_triton(test_case, device=None, *, required_on_cpu=True):
 
 ### 6.1 运行命令
 
-```bash
-SETUP=/path/to/npu-pytorch-setup
-FORK=/path/to/pytorch
+以下为原始命令，不依赖任何封装脚本。假设 PyTorch 源码在 `$PYTORCH`，CPU/NPU 虚拟环境分别在 `$VENV_CPU` / `$VENV_NPU`（见 3.3 节搭建）。
 
-$SETUP/run_test.sh cpu $FORK/test/export/test_export.py -v -k test_flex_attention_export
-$SETUP/run_test.sh npu $FORK/test/export/test_export.py -v -k test_flex_attention_export
-$SETUP/run_test.sh cpu $FORK/test/export/test_experimental.py -v -k TestExperimentFlex
-$SETUP/run_test.sh npu $FORK/test/export/test_experimental.py -v -k TestExperimentFlex
+```bash
+export PYTORCH=/path/to/pytorch          # 业务 fork 或 pin 树
+export VENV_CPU=/path/to/venv_cpu        # 仅含 CPU torch
+export VENV_NPU=/path/to/venv_npu        # 含 torch + torch_npu
+export CANN=/usr/local/Ascend/cann-9.1.0 # CANN 根目录
+
+# --- CPU 上跑 Flex export 用例 ---
+source "$VENV_CPU/bin/activate"
+cd "$PYTORCH"
+python test/export/test_export.py -v -k test_flex_attention_export
+python test/export/test_experimental.py -v -k TestExperimentFlex
+deactivate
+
+# --- NPU 上跑 Flex export 用例 ---
+source "$CANN/set_env.sh"                # CANN 环境变量
+source "$VENV_NPU/bin/activate"           # 含 torch_npu，注册 privateuse1
+export PYTORCH_TESTING_DEVICE_ONLY_FOR=npu  # 只跑 instantiate 出来的 npu 用例
+cd "$PYTORCH"
+python test/export/test_export.py -v -k test_flex_attention_export
+python test/export/test_experimental.py -v -k TestExperimentFlex
+deactivate
 ```
 
-`npu` 模式设 `PYTORCH_TESTING_DEVICE_ONLY_FOR=npu`；instantiate 后类名为 `*PRIVATEUSE1`，用例名带 `_npu_`，**不要**再加 `-k NPU`。
+说明：
+- `PYTORCH_TESTING_DEVICE_ONLY_FOR=npu` 让 `instantiate_device_type_tests` 只生成 privateuse1 用例，跳过 cpu/cuda 等。
+- instantiate 后 NPU 用例的类名为 `*PRIVATEUSE1`，用例名带 `_npu_`，`-k test_flex_attention_export` 即可匹配，**不要**再加 `-k NPU`。
+- NPU 模式必须先 `source CANN/set_env.sh` 再激活 `venv_npu`，否则 `import torch_npu` 找不到驱动库。
+- 也可用 `python -m pytest <file> -v -k <expr>` 替代直接 `python <file>`，效果等价。
 
 ### 6.2 验收表
 
