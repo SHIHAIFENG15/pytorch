@@ -30,7 +30,7 @@ from torch.testing._internal.common_device_type import (
     instantiate_device_type_tests,
     IS_FLEX_ATTENTION_CUDA_PLATFORM_SUPPORTED,
 )
-from torch.testing._internal.common_utils import HardwareClassification, TEST_CUDA
+from torch.testing._internal.common_utils import HardwareClassification
 from torch.utils import _pytree as pytree
 
 
@@ -1357,69 +1357,6 @@ def forward(self, args_0):
                 msg=lambda msg: f"{msg}\n{label}: buffer mutation mismatch",
             )
 
-    @unittest.skipIf(not TEST_CUDA, "CUDA not available")
-    def test_dynamo_graph_capture_fx_graph_annotate_overlap_pass(self):
-        class DummyOp(torch.autograd.Function):
-            @staticmethod
-            def forward(ctx, x, scalar):
-                ctx.save_for_backward(x)
-                return x + scalar
-
-            @staticmethod
-            def backward(ctx, grad_out):
-                return grad_out, None
-
-        def mock_fw_compute(x):
-            with fx_traceback.annotate({"compute": 0}):
-                return DummyOp.apply(x, 10)
-
-        def mock_bw_comm(x):
-            with fx_traceback.annotate({"comm": 0}):
-                return DummyOp.apply(x, 20)
-
-        def mock_bw_compute(x):
-            return DummyOp.apply(x, 30)
-
-        class Model(torch.nn.Module):
-            def forward(self, fw_in, bw_in):
-                fw_out = mock_fw_compute(fw_in)
-                # bw_in blocks bw_out
-                bw_in = mock_bw_comm(bw_in)
-                bw_out = mock_bw_compute(bw_in)
-                return fw_out, bw_out
-
-        def input_fn():
-            inputs = (torch.rand(2, 128, device="cuda", requires_grad=True),)
-            grad_ins = (torch.rand(2, 128, device="cuda"),)
-            return (
-                *inputs,
-                *grad_ins,
-            )
-
-        with torch.device("meta"):
-            model = Model()
-
-        import torch.fx.traceback as fx_traceback
-
-        with fx_traceback.preserve_node_meta():
-            gm = dynamo_graph_capture_for_export(model)(*input_fn())
-
-        """
-        def forward(self, args_0, args_1):
-            _tree_leaf_0, _tree_leaf_1, _tree_leaf_2, = pytree.tree_leaves((self, args_0, args_1,))
-            L_fw_in_ , L_bw_in_ , = self._in_shuffle_graph(_tree_leaf_0, _tree_leaf_1, _tree_leaf_2)
-            l_fw_in_ = L_fw_in_
-            l_bw_in_ = L_bw_in_
-            fwd_body_0 = self.fwd_body_0
-            bwd_body_0 = self.bwd_body_0
-            fw_out = torch.ops.higher_order.autograd_function_apply(fwd_body_0, bwd_body_0, l_fw_in_, args_tensor_mask = [True, False], non_differentiable_idx = []);  fwd_body_0 = bwd_body_0 = l_fw_in_ = None
-            bw_in = l_bw_in_ + 20;  l_bw_in_ = None
-            bw_out = bw_in + 30;  bw_in = None
-            return pytree.tree_unflatten(self._out_shuffle_graph(_tree_leaf_0, _tree_leaf_1, _tree_leaf_2, fw_out, bw_out), self._out_spec)
-        """
-        test_inputs = input_fn()
-        self.assertEqual(gm(*test_inputs), model(*test_inputs))
-
 
 @unittest.skipIf(not torch._dynamo.is_dynamo_supported(), "dynamo isn't supported")
 class TestExperimentFlex(TestCase):
@@ -1883,6 +1820,74 @@ def forward(self, arg0_1):
 
 instantiate_device_type_tests(TestExperimentFlex, globals(), except_for="cpu")
 
+
+@unittest.skipIf(not torch._dynamo.is_dynamo_supported(), "dynamo isn't supported")
+class TestExperimentDevice(TestCase):
+    hw_classification = HardwareClassification.ACCELERATOR
+    def test_dynamo_graph_capture_fx_graph_annotate_overlap_pass(self, device):
+        class DummyOp(torch.autograd.Function):
+            @staticmethod
+            def forward(ctx, x, scalar):
+                ctx.save_for_backward(x)
+                return x + scalar
+
+            @staticmethod
+            def backward(ctx, grad_out):
+                return grad_out, None
+
+        def mock_fw_compute(x):
+            with fx_traceback.annotate({"compute": 0}):
+                return DummyOp.apply(x, 10)
+
+        def mock_bw_comm(x):
+            with fx_traceback.annotate({"comm": 0}):
+                return DummyOp.apply(x, 20)
+
+        def mock_bw_compute(x):
+            return DummyOp.apply(x, 30)
+
+        class Model(torch.nn.Module):
+            def forward(self, fw_in, bw_in):
+                fw_out = mock_fw_compute(fw_in)
+                # bw_in blocks bw_out
+                bw_in = mock_bw_comm(bw_in)
+                bw_out = mock_bw_compute(bw_in)
+                return fw_out, bw_out
+
+        def input_fn():
+            inputs = (torch.rand(2, 128, device=device, requires_grad=True),)
+            grad_ins = (torch.rand(2, 128, device=device),)
+            return (
+                *inputs,
+                *grad_ins,
+            )
+
+        with torch.device("meta"):
+            model = Model()
+
+        import torch.fx.traceback as fx_traceback
+
+        with fx_traceback.preserve_node_meta():
+            gm = dynamo_graph_capture_for_export(model)(*input_fn())
+
+        """
+        def forward(self, args_0, args_1):
+            _tree_leaf_0, _tree_leaf_1, _tree_leaf_2, = pytree.tree_leaves((self, args_0, args_1,))
+            L_fw_in_ , L_bw_in_ , = self._in_shuffle_graph(_tree_leaf_0, _tree_leaf_1, _tree_leaf_2)
+            l_fw_in_ = L_fw_in_
+            l_bw_in_ = L_bw_in_
+            fwd_body_0 = self.fwd_body_0
+            bwd_body_0 = self.bwd_body_0
+            fw_out = torch.ops.higher_order.autograd_function_apply(fwd_body_0, bwd_body_0, l_fw_in_, args_tensor_mask = [True, False], non_differentiable_idx = []);  fwd_body_0 = bwd_body_0 = l_fw_in_ = None
+            bw_in = l_bw_in_ + 20;  l_bw_in_ = None
+            bw_out = bw_in + 30;  bw_in = None
+            return pytree.tree_unflatten(self._out_shuffle_graph(_tree_leaf_0, _tree_leaf_1, _tree_leaf_2, fw_out, bw_out), self._out_spec)
+        """
+        test_inputs = input_fn()
+        self.assertEqual(gm(*test_inputs), model(*test_inputs))
+
+
+instantiate_device_type_tests(TestExperimentDevice, globals(), except_for="cpu")
 
 
 if __name__ == "__main__":
