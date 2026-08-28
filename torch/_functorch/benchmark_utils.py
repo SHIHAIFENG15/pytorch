@@ -20,8 +20,11 @@ if TYPE_CHECKING:
 _R = TypeVar("_R")
 
 
-def synchronize() -> None:
-    pass
+def _is_device_process_label(labels: str) -> bool:
+    if "GPU" in labels:
+        return True
+    acc = torch.accelerator.current_accelerator()
+    return acc is not None and acc.type.upper() in labels
 
 
 def dump_chrome_trace(
@@ -31,7 +34,6 @@ def dump_chrome_trace(
     optimize_ctx: AbstractContextManager[Any],
     activities: Sequence[ProfilerActivity],
     num_runs: int = 1,
-    devices: list[str] | None = None,
     kwargs_for_f: dict[str, Any] | None = None,
     kwargs_for_profiler: dict[str, Any] | None = None,
 ) -> float:
@@ -45,12 +47,9 @@ def dump_chrome_trace(
     Outputs to trace_filename
     """
 
-    if devices is None:
-        devices = ["cuda"]
-
-    global synchronize
-    if devices != ["cpu"] and torch.accelerator.is_available():
-        synchronize = torch.accelerator.synchronize
+    def _sync() -> None:
+        if torch.accelerator.is_available():
+            torch.accelerator.synchronize()
 
     if kwargs_for_f is None:
         kwargs_for_f = {}
@@ -61,22 +60,22 @@ def dump_chrome_trace(
         torch.manual_seed(1337)
         for _ in range(5):  # warmup runs
             f(input_, **kwargs_for_f)
-            synchronize()
+            _sync()
         torch.manual_seed(1337)
         t0 = time.perf_counter()
         for _ in range(num_runs):
             f(input_, **kwargs_for_f)
-            synchronize()
+            _sync()
         t1 = time.perf_counter()
     timing = t1 - t0
 
     with profile(activities=activities, **kwargs_for_profiler) as prof:
         with optimize_ctx:
-            synchronize()
+            _sync()
             torch.manual_seed(1337)
             for _ in range(num_runs):
                 f(input_, **kwargs_for_f)
-                synchronize()
+                _sync()
     prof.export_chrome_trace(trace_filename)
 
     return timing
@@ -164,7 +163,9 @@ def compute_utilization(filename: str, total_length: float) -> tuple[float, floa
     for event in events:
         if "name" not in event:
             continue
-        if event["name"] == "process_labels" and "GPU" in event["args"]["labels"]:
+        if event["name"] == "process_labels" and _is_device_process_label(
+            event["args"]["labels"]
+        ):
             gpu_pids.append(event["pid"])
 
     total_length = total_length * 1e6
@@ -236,7 +237,6 @@ def benchmark_utilization(
         optimize_ctx,
         [ProfilerActivity.CUDA],
         num_runs=num_runs,
-        devices=["cuda"],
     )
     utilization, mm_conv_utilization = compute_utilization(
         chrome_trace_file_name, total_length
