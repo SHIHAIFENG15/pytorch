@@ -20,11 +20,40 @@ if TYPE_CHECKING:
 _R = TypeVar("_R")
 
 
+def synchronize() -> None:
+    pass
+
+
 def _is_device_process_label(labels: str) -> bool:
     if "GPU" in labels:
         return True
     acc = torch.accelerator.current_accelerator()
     return acc is not None and acc.type.upper() in labels
+
+
+def _synchronize_for_devices(devices: list[str] | None) -> None:
+    if devices == ["cpu"]:
+        return
+    if not torch.accelerator.is_available():
+        return
+    acc = torch.accelerator.current_accelerator()
+    if acc is None:
+        return
+    targets: list[torch.device] = []
+    for spec in devices or []:
+        if spec == "cpu":
+            continue
+        try:
+            dev = torch.device(spec)
+        except (RuntimeError, ValueError):
+            continue
+        if dev.type == acc.type:
+            targets.append(dev)
+    if not targets:
+        torch.accelerator.synchronize()
+        return
+    for dev in targets:
+        torch.accelerator.synchronize(dev)
 
 
 def dump_chrome_trace(
@@ -34,6 +63,7 @@ def dump_chrome_trace(
     optimize_ctx: AbstractContextManager[Any],
     activities: Sequence[ProfilerActivity],
     num_runs: int = 1,
+    devices: list[str] | None = None,
     kwargs_for_f: dict[str, Any] | None = None,
     kwargs_for_profiler: dict[str, Any] | None = None,
 ) -> float:
@@ -45,11 +75,18 @@ def dump_chrome_trace(
     Return total runtime without the profiler
 
     Outputs to trace_filename
+
+    ``devices`` defaults to ``["cuda"]`` (a historical sentinel). ``["cpu"]``
+    skips accelerator sync so CPU timings are not polluted. Other entries are
+    parsed as ``torch.device`` and synchronized when they match the current
+    accelerator type; otherwise the current accelerator is synchronized.
     """
 
+    if devices is None:
+        devices = ["cuda"]
+
     def _sync() -> None:
-        if torch.accelerator.is_available():
-            torch.accelerator.synchronize()
+        _synchronize_for_devices(devices)
 
     if kwargs_for_f is None:
         kwargs_for_f = {}
@@ -237,6 +274,7 @@ def benchmark_utilization(
         optimize_ctx,
         [ProfilerActivity.CUDA],
         num_runs=num_runs,
+        devices=["cuda"],
     )
     utilization, mm_conv_utilization = compute_utilization(
         chrome_trace_file_name, total_length
